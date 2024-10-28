@@ -1,0 +1,1761 @@
+---
+title: "CSRproject"
+author: "Raelyn"
+date: "2024-03-10"
+output: html_document
+---
+# R packages
+```{r}
+#clean data
+library(tidyverse)
+#tree
+library(rtrees)
+library(ape)
+library(megatrees)
+#
+library(phytools)
+#CCA
+library(ggplot2)
+library(ggdensity)
+library(vegan)
+library(cowplot)
+library(ggstatsplot)
+library(grid)
+library(ggpubr)
+library(ggrepel)
+library(ggvegan)
+library(scales)
+#model
+library(performance)
+library(caper)
+#color
+library(RColorBrewer)
+library(scico)
+
+```
+
+# Read data
+```{r pressure, echo=FALSE}
+load("D:/CSRTraits/DataAnalysis20240310/TotalCSRdata20240310.RData")
+```
+
+# Analysis
+## Generate tree
+```{r}
+sum(is.na(CSR.data_01$taxon_name)) #0
+sum(is.na(CSR.data_01$genus)) #0
+sum(is.na(CSR.data_01$family)) #0
+
+CSRspecies <- CSR.data_01 %>% 
+  dplyr::select(taxon_name, genus, family) %>% 
+  as.data.frame() %>% 
+  rename("species" = "taxon_name")
+
+#construct phylogenetic tree
+CSRspeciestree <- get_tree(sp_list = CSRspecies,
+                      taxon = "plant",
+                      scenario = "at_basal_node")
+# 2258 species added at genus level (*) 
+# 351 species added at family level (**) 
+```
+
+## part 1.1 phylogenetic regression for traits
+```{r}
+str(CSR.data_01)
+colnames(CSR.data_01)
+length(unique(CSR.data_01$taxon_name)) #7038
+# CSR.data_02 <- CSR.data_01 %>% 
+#   rename("species" = "taxon_name") %>% 
+#   mutate(species = gsub(" ", "_", species))
+
+#1.整理数据
+CSR.data_02 <- CSR.data_01 %>% 
+  ungroup() %>% 
+  dplyr::select(species, c_score:r_score, LA.mm2:growing_season_length) %>% 
+  as.data.frame()
+rownames(CSR.data_02) <- CSR.data_02$species
+
+#使数据框的物种名和树上的物种名顺序一样
+CSR.data_02 <- CSR.data_02[CSRspeciestree$tip.label, ]
+
+```
+
+### 1.LA.mm2
+#### phylogenetic regression
+```{r}
+#data
+str(CSR.data_02_LA)
+#tree
+LA.tree <-drop.tip(CSRspeciestree, 
+                  setdiff(CSRspeciestree$tip.label, 
+                          row.names(CSR.data_02_LA)))#new tree
+LA.tree
+# 创建空的结果数据框
+LA_model_results <- data.frame(Model_Name = character(),
+                                     Formula = character(),
+                                     AIC = numeric(),
+                                     R2 = numeric(),
+                                     Coeff = numeric(),
+                                     P_value = numeric(),
+                                     stringsAsFactors = FALSE)
+x_columns <- c("c_score", "s_score", "r_score")
+# 循环拟合一次和二次线性模型
+for (x in x_columns) {
+  # 提取因变量列名
+  #dependent_variable <- colnames(df)[i]
+  # 构建一次线性模型
+  lm_formula <- as.formula(paste("log(LA.mm2) ~", x))
+  lm_model <- phylolm::phylolm(lm_formula, 
+                               data = CSR.data_02_LA, 
+                               phy = LA.tree, 
+                               model = "lambda")
+  # 构建二次线性模型
+  quadratic_formula <- as.formula(paste("log(LA.mm2) ~", x, "+ I(", x, "^2)"))
+  quadratic_model <- phylolm::phylolm(quadratic_formula, 
+                                      data = CSR.data_02_LA, 
+                                      phy = LA.tree, 
+                                      model = "lambda")
+  # 提取模型结果
+  lm_AIC <- AIC(lm_model)#get AIC
+  lm_R2 <- summary(lm_model)$adj.r.squared#get R2 
+  lm_coef_value <- coef(lm_model)#get estimate
+  lm_p_values <- summary(lm_model)$coefficients[, "p.value"]#get p value
+  quadratic_AIC <- AIC(quadratic_model)
+  quadratic_R2 <- summary(quadratic_model)$adj.r.squared
+  quadratic_coef_value <- coef(quadratic_model)
+  quadratic_p_values <- summary(quadratic_model)$coefficients[, "p.value"]
+  # 创建模型结果的行
+  lm_result_row <- data.frame(Model_Name = paste("Linear Model (", x, ")", sep = ""),
+                              Formula = as.character(lm_formula),
+                              AIC = lm_AIC,
+                              R2 = lm_R2,
+                              Coeffic = paste(lm_coef_value, collapse = ", "),
+                              P_values = paste(lm_p_values, collapse = ", "),
+                              stringsAsFactors = FALSE)
+  quadratic_result_row <- data.frame(Model_Name = paste("Quadratic Model (", x, ")", sep = ""),
+                                     Formula = as.character(quadratic_formula),
+                                     AIC = quadratic_AIC,
+                                     R2 = quadratic_R2,
+                                     Coeffic = paste(quadratic_coef_value, collapse = ", "),
+                                     P_values = paste(quadratic_p_values, collapse = ", "),
+                                     stringsAsFactors = FALSE)
+  # 将模型结果添加到结果数据框
+  LA_model_results <- rbind(LA_model_results, lm_result_row, quadratic_result_row)
+}
+
+rownames(LA_model_results) <- NULL
+LA_model_results_F <- print(LA_model_results)
+LA_model_results_F
+
+#模型诊断
+## C
+C_LA_lm_model <- phylolm::phylolm(log(LA.mm2) ~ c_score, 
+                                  data = CSR.data_02_LA, 
+                                  phy = LA.tree, 
+                                  model = "lambda")
+summary(C_LA_lm_model)
+print(C_LA_lm_model)
+plot(C_LA_lm_model)
+plot(x = C_LA_lm_model$fitted.values, 
+     y = C_LA_lm_model$residuals)
+
+C_LA_lm_model <- phylolm::phylolm(LA.mm2 ~ c_score, 
+                                  data = CSR.data_02_LA, 
+                                  phy = LA.tree, 
+                                  model = "lambda")
+plot(x = C_LA_lm_model$fitted.values, 
+     y = C_LA_lm_model$residuals)
+
+hist(C_LA_lm_model$fitted.values)
+hist(C_LA_lm_model$coefficients)
+
+plot(x = C_LA_lm_model$fitted.values, 
+     y = rstandard(C_LA_lm_model))
+
+# plot(C_LA_lm_model)
+# check_model(C_LA_lm_model)
+plot.phylo(C_LA_lm_model)
+
+#使用普通线性模型来看看结果
+tese <- lm(LA.mm2 ~ s_score, data = CSR.data_02_LA)
+par(mfrow = c(2, 2))
+plot(tese)
+tese <- lm(LA.mm2 ~ s_score + (s_score^2), data = CSR.data_02_LA)
+par(mfrow = c(2, 2))
+plot(tese)
+tese <- lm(log(LA.mm2) ~ s_score, data = CSR.data_02_LA)
+par(mfrow = c(2, 2))
+plot(tese)
+tese <- lm(log(LA.mm2) ~ s_score + (s_score^2), data = CSR.data_02_LA)
+par(mfrow = c(2, 2))
+plot(tese)
+# par(mfrow = c(2, 3))
+# check_model(tese)
+# theme_set(theme_classic(base_size = 6))
+
+```
+
+## Visul
+```{r}
+str(CSR.data_02)
+colnames(CSR.data_02)
+```
+
+### 1.LA
+```{r leafN, echo=FALSE}
+colnames(CSR.data_02)
+#1.data
+str(CSR.data_02_LA)
+#2.tree
+LA.tree <-drop.tip(CSRspeciestree, 
+                  setdiff(CSRspeciestree$tip.label, 
+                          row.names(CSR.data_02_LA)))#new tree
+LA.tree
+#3.long data
+CSR.data_02_LA_long <- CSR.data_02_LA %>% 
+  dplyr::select(c_score, s_score, r_score, LA.mm2) %>% 
+  tidyr::pivot_longer(c_score:r_score, names_to = "csr", values_to = "csr.val") %>% 
+  dplyr::mutate(csr = fct_inorder(csr))
+
+#4.1 C model
+summary(CSR.data_02_LA)
+LA.C.Mod <- phylolm::phylolm(log(LA.mm2) ~ c_score + I(c_score^2), 
+                             data = CSR.data_02_LA, 
+                             phy = LA.tree, model = "lambda")
+#model coefficients
+coefficients(LA.C.Mod)
+#new data
+LA.C.Newdata <- data.frame(c_score = rep(seq(from = 0, to = 97.54, length = 5000), 4))
+# X1 <- model.matrix( ~ (c_score), data = LA.C.Newdata)
+X1 <- model.matrix( ~ (c_score + I(c_score^2)), data = LA.C.Newdata)
+LA.C.Newdata$Pred <- X1 %*% coefficients(LA.C.Mod)
+LA.C.Newdata$SE <- sqrt(diag(X1 %*% vcov(LA.C.Mod) %*% t(X1)))
+colnames(LA.C.Newdata)
+
+#4.2 S model
+summary(CSR.data_02_LA)
+LA.S.Mod <- phylolm::phylolm(log(LA.mm2) ~ s_score + I(s_score^2), 
+                             data = CSR.data_02_LA, 
+                             phy = LA.tree, model = "lambda")
+#model coefficients
+coefficients(LA.S.Mod)
+#new data
+LA.S.Newdata <- data.frame(s_score = rep(seq(from = 0, to = 100, length = 5000), 4))
+X1 <- model.matrix( ~ (s_score + I(s_score^2)), data = LA.S.Newdata)
+LA.S.Newdata$Pred <- X1 %*% coefficients(LA.S.Mod)
+LA.S.Newdata$SE <- sqrt(diag(X1 %*% vcov(LA.S.Mod) %*% t(X1)))
+colnames(LA.S.Newdata)
+
+#4.3 R model
+summary(CSR.data_02_LA)
+LA.R.Mod <- phylolm::phylolm(log(LA.mm2) ~ r_score + I(r_score^2), # + I(c_score^2)
+                                      data = CSR.data_02_LA, 
+                                      phy = LA.tree, model = "lambda")
+#model coefficients
+coefficients(LA.R.Mod)
+#new data
+LA.R.Newdata <- data.frame(r_score = rep(seq(from = 0, to = 100, length = 5000), 4))
+X1 <- model.matrix( ~ (r_score + I(r_score)^2), data = LA.R.Newdata)
+LA.R.Newdata$Pred <- X1 %*% coefficients(LA.R.Mod)
+LA.R.Newdata$SE <- sqrt(diag(X1 %*% vcov(LA.R.Mod) %*% t(X1)))
+colnames(LA.R.Newdata)
+
+#5. plot
+################################################
+# C:"#8B2706" "#D29773"
+# S:"#0C4C00" "#7BA755"
+# R:"#023E7D" "#71A7C4"
+LA.plot.C <- ggplot(data = subset(CSR.data_02_LA_long, csr == "c_score")) + 
+  geom_hdr(aes(x = csr.val, y = log(LA.mm2)), 
+           fill = "#8DD3C7", show.legend = F) + #8DD3C7
+  geom_smooth(mapping = aes(x = c_score, y = Pred), method = "lm", formula = y ~ x + I(x^2), se = TRUE, linewidth = 2, data = LA.C.Newdata, colour = "#24878eff") + #  2166AC
+  ylab("Leaf Area (mm2)") +
+  xlab(NULL) +
+  # ylim(-5.9, -1.6) + "#92C5DE" "#4393C3" "#2166AC"
+  theme_minimal() +
+  theme(axis.title.y = element_text(size = 16), 
+        #axis.text.x = element_text(size = 10),
+        axis.text.x = element_blank(),
+        axis.text.y = element_text(size = 14)) + 
+  theme(strip.placement = "outside") +
+  theme(panel.grid.minor = element_blank())
+LA.plot.C
+
+LA.plot.S <- ggplot(data = subset(CSR.data_02_LA_long, csr == "s_score")) +
+  geom_hdr(aes(x = csr.val, y = log(LA.mm2)), 
+           fill = "#7570B3", show.legend = F) + # FDDBC7 
+  geom_smooth(mapping = aes(x = s_score, y = Pred), method = "lm", formula = y ~ x + I(x^2), se = TRUE, linewidth = 2, data = LA.S.Newdata, colour = "#6A3D9A") + # D6604D
+  # ylab("Leaf Nitrogen Content (mg/g)") +
+  ylab(NULL) + 
+  xlab(NULL) +
+  # ylim(-1, 15) +
+  theme_minimal() +
+  theme(#axis.text.x = element_text(size = 10),
+        axis.text.x = element_blank(),
+        axis.text.y = element_text(size = 14)) + 
+  theme(strip.placement = "outside") +
+  theme(panel.grid.minor = element_blank())
+LA.plot.S
+
+LA.plot.R <- ggplot(data = subset(CSR.data_02_LA_long, csr == "r_score")) + 
+  geom_hdr(aes(x = csr.val, y = log(LA.mm2)), 
+           fill = "#FDBF6F", show.legend = F) + #F6E8C3
+  geom_smooth(mapping = aes(x = r_score, y = Pred), method = "lm", formula = y ~ x + I(x^2), se = TRUE, linewidth = 2, data = LA.R.Newdata, colour = "#8c510a") + #8c510a
+  # ylab("Leaf Nitrogen Content (mg/g)") +
+  ylab(NULL) + 
+  xlab(NULL) +
+  # ylim(1.05, 4.5) +
+  theme_minimal() +
+  theme(#axis.text.x = element_text(size = 10),
+    axis.text.x = element_blank(),
+        axis.text.y = element_text(size = 14)) + 
+  theme(strip.placement = "outside") +
+  theme(panel.grid.minor = element_blank())
+LA.plot.R
+
+# cowplot::plot_grid(LA.plot.C, LA.plot.S, LA.plot.R)
+# LA.plot.CSR <- 
+ggpubr::ggarrange(LA.plot.C, LA.plot.S, LA.plot.R,
+                         # labels = "AUTO", 
+                         ncol = 3, 
+                         # label_size = 14,
+                         nrow = 1)
+# LA.plot.CSR
+```
+
+## Part 1.2 phylogenetic ANOVA model
+```{r}
+str(CSR.catedata_08)
+colnames(CSR.catedata_08)
+CSR.catedata_09 <- CSR.catedata_08 %>% 
+  rename("species" = "taxon_name") %>% 
+  mutate(species = gsub(" ", "_", species))
+
+```
+
+### 1.lifecycle
+```{r}
+table(CSR.catedata_09$lifecycle)
+   # annual  biennial perennial 
+   #    725       154      6159
+
+#1.1 获取lifecycle的数据集
+lifecycle <- CSR.catedata_09 %>% 
+  select(species, lifecycle, c_score, s_score, r_score) %>% 
+  #mutate(log_SF=log(Self.fertile)) %>% 
+  na.omit() %>% # delete NA
+  as.data.frame()
+
+#1.2 生成用于分析的数据集和tree
+lifecycle <- lifecycle %>%
+  `rownames<-`(lifecycle$species) %>% #把行名换成物种名
+  select(-1) #删除第一行
+#1.3 剪切大树
+LC.tree <- CSRspeciestree %>%
+  drop.tip(setdiff(.$tip.label, row.names(lifecycle)))
+#1.4 让数据框的物种名和树的一样
+lifecycle1 <- lifecycle[LC.tree$tip.label, ] #方法1
+
+# lifecycle_01 <- lifecycle %>% #方法2
+#   `rownames<-`(.$species) %>%
+#   select(-1) %>%
+#   {LC.tree <- drop.tip(CSRspeciestree, 
+#                        setdiff(CSRspeciestree$tip.label, 
+#                                row.names(.)))
+#     LC.tree <- LC.tree$tip.label 
+#     .[LC.tree, ]}
+#1.5 查看最后的数据集
+table(lifecycle1$lifecycle)
+
+#2.1 构建模型
+##2.1.1 c_score
+LC_C.phylm <- phytools::phylANOVA(LC.tree, 
+                             lifecycle1$lifecycle, 
+                             lifecycle1$c_score, 
+                             nsim = 1000, 
+                             posthoc = TRUE, 
+                             p.adj = "bonferroni")# model
+LC_C.phylm # check results
+##2.1.2 s_score
+LC_S.phylm <- phytools::phylANOVA(LC.tree, 
+                             lifecycle1$lifecycle, 
+                             lifecycle1$s_score, 
+                             nsim = 1000, 
+                             posthoc = TRUE, 
+                             p.adj = "bonferroni")# model
+LC_S.phylm
+##2.1.3 r_score
+LC_R.phylm <- phytools::phylANOVA(LC.tree, 
+                             lifecycle1$lifecycle, 
+                             lifecycle1$r_score, 
+                             nsim = 1000, 
+                             posthoc = TRUE, 
+                             p.adj = "bonferroni")# model
+LC_R.phylm
+#提取模型结果
+LC_CSR.result <- data.frame(Model_Name = character(),
+                                 F_value = numeric(),
+                                 P_value = numeric(),
+                                 Sum_Sq = numeric(),
+                                 Mean_Sq = numeric(),
+                                 Method = character(),
+                                 stringsAsFactors = FALSE)
+models_list <- list(LC_C.phylm, LC_S.phylm, LC_R.phylm)
+models_name <- c("LC_C.phylm", "LC_S.phylm", "LC_R.phylm")
+for(i in 1:length(models_list)){
+  model <- models_list[[i]]
+  model_name <- models_name[i]
+  #model_formula <- formula(model)
+  ANOVA_F_value <- model$F
+  ANOVA_p_values <- model$Pf 
+  ANOVA_Sum_Sq <- model$`Sum Sq`
+  ANOVA_Mean_Sq <- model$`Mean Sq`
+  ANOVA_Method <- model$method
+  LC_CSR.result <- rbind(LC_CSR.result,
+                         data.frame(Model_Name = model_name,
+                                    F_value = ANOVA_F_value,
+                                    P_value = ANOVA_p_values,
+                                    Sum_Sq = paste(ANOVA_Sum_Sq, collapse = ", "),
+                                    Mean_Sq = paste(ANOVA_Mean_Sq, collapse = ", "),
+                                    Method = ANOVA_Method))
+}
+print(LC_CSR.result)
+
+```
+
+## Visual
+```{r}
+str(CSR.catedata_09)
+```
+
+### 1.lifecycle
+```{r}
+# compar_LCH <- list(c("annual", "biennial"), c("biennial", "perennial"), c("annual", "perennial"))
+table(CSR.catedata_09$lifecycle)
+# annual  biennial perennial 
+# 725       154      6159
+
+lifecycle <- CSR.catedata_09 %>% 
+  tidyr::pivot_longer(c_score:r_score, names_to = "csr", values_to = "csr.val") %>%
+  dplyr::select(csr, csr.val, lifecycle) %>% 
+  dplyr::filter(lifecycle !="NA") %>% 
+  dplyr::mutate(csr = fct_inorder(csr)) %>% 
+  ggplot2::ggplot(aes(x=lifecycle,
+             y=csr.val), group = csr)+
+  stat_summary(aes(color = csr),
+               fun.data = "mean_sdl",
+               fun.args = list(mult = 1),
+               geom = "pointrange",
+               position = position_dodge(width = 0.5),
+               size = 0.5) + #color = csr
+  scale_color_manual(name = "Strategies", 
+                      values = c("#24878eff", "#6A3D9A", "#8c510a"),
+                     # values = c("#B3523E", "#008643", "#0071D3"),
+                     breaks = c("c_score", "s_score", "r_score"),
+                     labels = c("C", "S", "R")) +
+  scale_x_discrete(breaks = c("annual", "biennial", "perennial"), 
+                 labels = c("Annual", "Biennial", "Perennial"))+
+  theme_classic() +
+  theme(strip.text.x = element_text(size = 12),
+        strip.background = element_rect(color = "white", fill = "#f0f0f0"),
+        panel.border = element_rect(color = "#f0f0f0", fill = NA)) +
+  ylab("Score %") + 
+  # xlab("Life Cycle") + 
+  xlab(NULL) + 
+  ggtitle("Life Cycle") +
+  theme(plot.title = element_text(vjust = -6)) +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  theme(legend.position = "none",
+        # legend.position = c(0.999, 0.995),
+        # legend.justification = c(0.999, 0.995),
+        # legend.background = element_rect(colour = "white"),#fill = "white",
+        plot.title = element_text(#size = rel(1.2), lineheight = 0.6,
+                                  # family = "Calibri",
+                                  face = "bold", colour = "black")
+        ) +
+  theme(#legend.position = "none",
+    legend.title = element_text(size = 12),
+        legend.text = element_text(size = 11),
+        # legend.text = element_text(size = 12), #,face = "italic"
+        legend.background = element_blank(),
+        # strip.background = element_rect(color = "white", fill = "white"), 
+        strip.text = element_blank(), 
+        panel.background = element_rect(fill = "white", colour = "white"),
+        panel.border = element_blank(),
+        #axis.text.x = element_blank(),
+        axis.title = element_text(size = 14, color = "black"),
+        axis.text = element_text(size = 12, colour = "black"))
+lifecycle
+
+```
+
+## Save figures
+```{r}
+ggpubr::ggarrange(Drought, Poorsoil, 
+                  growthform, Growthrate, 
+                  FlowerConspicuous, 
+          align = "hv",
+          labels = "AUTO",
+          # common.legend = TRUE,
+          heights = c(0.33, 0.33, 0.33, 0.33),
+          widths = c(0.49, 0.49),
+          # labels = c("A", "B"),label_size = 14,
+          ncol = 2, nrow = 3) + 
+  theme(plot.margin = margin(0.25,0.25,0.5,0.25, unit = "cm"))
+
+ggsave("FigureS1_0910.pdf", plot = last_plot(),
+       device = "pdf", dpi = 600, limitsize = FALSE,
+       width = 20, height = 25, units = "cm")
+
+
+```
+
+
+## Part 1.3 phylogenetic regression for environmental variables
+```{r}
+str(CSR.envi_02)
+colnames(CSR.envi_02)
+
+str(CSR.data_01)
+str(CSRspeciestree)
+
+#检查traits和envi两个数据框的物种名是否完全一致
+identical_species <- all(CSR.data_01$taxon_name %in% CSR.envi_02$taxon_name) && all(CSR.envi_02$taxon_name %in% CSR.data_01$taxon_name)
+
+if (identical_species) {
+  print("物种名完全一致")
+} else {
+  print("物种名不完全一致")
+}
+
+CSR.envi_04 <- CSR.envi_02 %>% #CSR.envi_03已经在下面CCA部分用于生成完整数据集了
+  dplyr::select(taxon_name, c_score, s_score, r_score, Disturbance.Severity:SALINITY) %>% 
+  rename("species" = "taxon_name") %>% 
+  mutate(species = gsub(" ", "_", species)) %>% 
+  as.data.frame()
+
+rownames(CSR.envi_04) = CSR.envi_04$species
+
+summary(CSR.envi_04)
+```
+
+### 1.Disturbance.Severity
+#### phylogenetic regression
+```{r}
+#data
+CSR.envi_04_DS <- CSR.envi_04 %>% 
+  dplyr::select(Disturbance.Severity, c_score, s_score, r_score) %>% 
+  filter(Disturbance.Severity >= 0)
+str(CSR.envi_04_DS)
+#tree
+DS.tree <-drop.tip(CSRspeciestree, setdiff(CSRspeciestree$tip.label, 
+                          row.names(CSR.envi_04_DS)))#new tree
+DS.tree
+# 创建空的结果数据框
+DS_model_results <- data.frame(Model_Name = character(),
+                              Formula = character(),
+                              AIC = numeric(),
+                              R2 = numeric(),
+                              Coeff = numeric(),
+                              P_value = numeric(),
+                              stringsAsFactors = FALSE)
+x_columns <- c("c_score", "s_score", "r_score")
+# 循环拟合一次和二次线性模型
+for (x in x_columns) {
+  # 提取因变量列名
+  #dependent_variable <- colnames(df)[i]
+  # 构建一次线性模型
+  lm_formula <- as.formula(paste("Disturbance.Severity ~", x))
+  lm_model <- phylolm::phylolm(lm_formula, 
+                               data = CSR.envi_04_DS, 
+                               phy = DS.tree, 
+                               model = "lambda")
+  # 构建二次线性模型
+  quadratic_formula <- as.formula(paste("Disturbance.Severity ~", x, "+ I(", x, "^2)"))
+  quadratic_model <- phylolm::phylolm(quadratic_formula, 
+                                      data = CSR.envi_04_DS, 
+                                      phy = DS.tree, 
+                                      model = "lambda")
+  # 提取模型结果
+  lm_AIC <- AIC(lm_model)#get AIC
+  lm_R2 <- summary(lm_model)$adj.r.squared#get R2 
+  lm_coef_value <- coef(lm_model)#get estimate
+  lm_p_values <- summary(lm_model)$coefficients[, "p.value"]#get p value
+  quadratic_AIC <- AIC(quadratic_model)
+  quadratic_R2 <- summary(quadratic_model)$adj.r.squared
+  quadratic_coef_value <- coef(quadratic_model)
+  quadratic_p_values <- summary(quadratic_model)$coefficients[, "p.value"]
+  # 创建模型结果的行
+  lm_result_row <- data.frame(Model_Name = paste("Linear Model (", x, ")", sep = ""),
+                              Formula = as.character(lm_formula),
+                              AIC = lm_AIC,
+                              R2 = lm_R2,
+                              Coeffic = paste(lm_coef_value, collapse = ", "),
+                              P_values = paste(lm_p_values, collapse = ", "),
+                              stringsAsFactors = FALSE)
+  quadratic_result_row <- data.frame(Model_Name = paste("Quadratic Model (", x, ")", sep = ""),
+                                     Formula = as.character(quadratic_formula),
+                                     AIC = quadratic_AIC,
+                                     R2 = quadratic_R2,
+                                     Coeffic = paste(quadratic_coef_value, collapse = ", "),
+                                     P_values = paste(quadratic_p_values, collapse = ", "),
+                                     stringsAsFactors = FALSE)
+  # 将模型结果添加到结果数据框
+  DS_model_results <- rbind(DS_model_results, lm_result_row, quadratic_result_row)
+}
+
+rownames(DS_model_results) <- NULL
+DS_model_results_F <- print(DS_model_results)
+DS_model_results_F
+
+#模型诊断
+## C
+C_lm_model <- phylolm::phylolm(log(Disturbance.Severity) ~ c_score,
+                                  data = CSR.envi_04_DS,
+                                  phy = DS.tree,
+                                  model = "lambda")
+# plot(C_lm_model)
+plot(x = C_lm_model$fitted.values,
+     y = C_lm_model$residuals)
+
+C_lm_model <- phylolm::phylolm(Disturbance.Severity ~ c_score,
+                                  data = CSR.envi_04_DS,
+                                  phy = DS.tree,
+                                  model = "lambda")
+plot(x = C_lm_model$fitted.values,
+     y = C_lm_model$residuals)
+```
+
+## Visul
+```{r}
+str(CSR.envi_04)
+
+coefficients(LA.S.Mod)
+#new data
+LA.S.Newdata 
+```
+
+### 1.Disturbance.Severity
+```{r}
+#1.data
+CSR.envi_04_DS <- CSR.envi_04 %>% 
+  dplyr::select(Disturbance.Severity, c_score, s_score, r_score) %>% 
+  dplyr::filter(Disturbance.Severity >= 0)
+str(CSR.envi_04_DS)
+#2.tree
+DS.tree <- ape::drop.tip(CSRspeciestree, setdiff(CSRspeciestree$tip.label, 
+                          row.names(CSR.envi_04_DS)))#new tree
+DS.tree
+
+#3.long data
+CSR.envi_04_DS_long <- CSR.envi_04_DS %>% 
+  dplyr::select(c_score, s_score, r_score, Disturbance.Severity) %>% 
+  tidyr::pivot_longer(c_score:r_score, names_to = "csr", values_to = "csr.val") %>% 
+  dplyr::mutate(csr = fct_inorder(csr))
+
+#4.1C model
+summary(CSR.envi_04_DS)
+DS.C.Mod <- phylolm::phylolm((Disturbance.Severity) ~ c_score + I(c_score^2), 
+                             data = CSR.envi_04_DS, phy = DS.tree, model = "lambda")
+#model coefficients
+coefficients(DS.C.Mod)
+#new data
+DS.C.Newdata <- data.frame(c_score = rep(seq(from = 0, to = 97.538, length = 5000), 4))
+# X1 <- model.matrix( ~ (c_score), data = DS.C.Newdata)
+X1 <- model.matrix( ~ (c_score + I(c_score^2)), data = DS.C.Newdata)
+DS.C.Newdata$Pred <- X1 %*% coefficients(DS.C.Mod)
+DS.C.Newdata$SE <- sqrt(diag(X1 %*% vcov(DS.C.Mod) %*% t(X1)))
+colnames(DS.C.Newdata)
+#4.2S model
+summary(CSR.envi_04_DS)
+DS.S.Mod <- phylolm::phylolm((Disturbance.Severity) ~ s_score,# + I(s_score^2), 
+                             data = CSR.envi_04_DS, phy = DS.tree, model = "lambda")
+#model coefficients
+coefficients(DS.S.Mod)
+#new data
+DS.S.Newdata <- data.frame(s_score = rep(seq(from = 0, to = 100, length = 5000), 4))
+X1 <- model.matrix( ~ (s_score), data = DS.S.Newdata)
+# X1 <- model.matrix( ~ (s_score + I(s_score^2)), data = DS.S.Newdata)
+DS.S.Newdata$Pred <- X1 %*% coefficients(DS.S.Mod)
+DS.S.Newdata$SE <- sqrt(diag(X1 %*% vcov(DS.S.Mod) %*% t(X1)))
+colnames(DS.S.Newdata)
+#4.3R model
+summary(DisturSev1)
+DS.R.Mod <- phylolm::phylolm((Disturbance.Severity) ~ r_score + I(r_score^2), # + I(c_score^2)
+                                       data = CSR.envi_04_DS, phy = DS.tree, model = "lambda")
+#model coefficients
+coefficients(DS.R.Mod)
+#new data
+DS.R.Newdata <- data.frame(r_score = rep(seq(from = 0, to = 100, length = 5000), 4))
+# X1 <- model.matrix( ~ (r_score), data = DS.R.Newdata)
+X1 <- model.matrix( ~ (r_score + I(r_score^2)), data = DS.R.Newdata)
+DS.R.Newdata$Pred <- X1 %*% coefficients(DS.R.Mod)
+DS.R.Newdata$SE <- sqrt(diag(X1 %*% vcov(DS.R.Mod) %*% t(X1)))
+colnames(DS.R.Newdata)
+
+#5.plot####
+DS.plot.C <- ggplot2::ggplot(data = subset(CSR.envi_04_DS_long, csr == "c_score")) + 
+  geom_hdr(aes(x = csr.val, y = (Disturbance.Severity)), 
+           fill = "#8DD3C7", show.legend = F) +
+  geom_smooth(mapping = aes(x = c_score, y = Pred), method = "lm", 
+              formula = y ~ x + I(x^2), se = TRUE, linewidth = 2, 
+              data = DS.C.Newdata, colour = "#24878eff") + #"#1B9E77"
+  ylab("Disturbance Severity") + 
+  xlab(NULL) + 
+  # xlab("C score %") +
+  # ylim(-5.9, -1.6) +
+  scale_y_continuous(breaks = c(0.0, 0.5, 1.0), 
+                    expand = c(0.01,0.01))+
+  scale_x_continuous(expand = c(0.01,0.01))+
+  # theme_minimal() +
+  # theme_classic() +
+  theme_bw()+
+  theme(axis.title.y = element_text(size = 16), 
+        axis.title.x = element_text(size = 16), 
+        axis.text.x = element_blank(), 
+        # axis.text.x = element_text(size = 10), #panel.grid = element_blank(),
+        axis.text.y = element_text(size = 14)) + 
+  theme(strip.placement = "outside") +
+  theme(panel.grid.minor = element_blank())
+DS.plot.C
+
+DS.plot.S <- ggplot2::ggplot(data = subset(CSR.envi_04_DS_long, csr == "s_score")) + 
+  geom_hdr(aes(x = csr.val, y = (Disturbance.Severity)), 
+           fill = "#7570B3", show.legend = F) +
+  geom_smooth(mapping = aes(x = s_score, y = Pred), method = "lm", 
+              formula = y ~ x, se = TRUE, linewidth = 2, # + I(x^2)
+              data = DS.S.Newdata, colour = "#6A3D9A") +
+  ylab(NULL) + 
+  xlab(NULL) + 
+  # xlab("S score %") +
+  # ylim(-5.9, -1.6) +
+  scale_y_continuous(breaks = c(0.0, 0.5, 1.0), 
+                    expand = c(0.01,0.01))+
+  scale_x_continuous(expand = c(0.01,0.01))+
+  # theme_minimal() +
+  # theme_classic() +
+  theme_bw()+
+  theme(axis.title.x = element_text(size = 16), 
+        axis.text.x = element_blank(), 
+        # axis.text.x = element_text(size = 10),
+        axis.text.y = element_text(size = 14)) + 
+  theme(strip.placement = "outside") +
+  theme(panel.grid.minor = element_blank())
+DS.plot.S
+
+DS.plot.R <- ggplot2::ggplot(data = subset(CSR.envi_04_DS_long, csr == "r_score")) + 
+  geom_hdr(aes(x = csr.val, y = (Disturbance.Severity)), 
+           fill = "#FDBF6F", show.legend = F) +
+  geom_smooth(mapping = aes(x = r_score, y = Pred), method = "lm", 
+              formula = y ~ x + I(x^2), se = TRUE, linewidth = 2, 
+              data = DS.R.Newdata, colour = "#8c510a") +#"#A6761D" 
+  ylab(NULL) + 
+  xlab(NULL) + 
+  # xlab("R score %") +
+  # ylim(-5.9, -1.6) +
+  scale_y_continuous(breaks = c(0.0, 0.5, 1.0), 
+                    expand = c(0.01,0.01))+
+  scale_x_continuous(expand = c(0.01,0.01))+
+  # theme_minimal() +
+  # theme_classic() +
+  theme_bw()+
+  theme(axis.title.x = element_text(size = 16),
+        axis.text.x = element_blank(), 
+        # axis.text.x = element_text(size = 10),
+        axis.text.y = element_text(size = 14)) + 
+  theme(strip.placement = "outside") +
+  theme(panel.grid.minor = element_blank())
+DS.plot.R
+
+# DS.plot.CSR <- 
+ggpubr::ggarrange(DS.plot.C, DS.plot.S, DS.plot.R,
+                         # labels = "AUTO", 
+                         ncol = 3, 
+                         # label_size = 14,
+                         nrow = 1)
+# DS.plot.CSR
+```
+
+
+## Save figures
+```{r}
+ggpubr::ggarrange(DS.plot.C, DS.plot.S, DS.plot.R, 
+                  DF.plot.C, DF.plot.S, DF.plot.R, 
+          # DFH.plot.C, DFH.plot.S, DFH.plot.R,
+          MF.plot.C, MF.plot.S, MF.plot.R, 
+          GP.plot.C, GP.plot.S, GP.plot.R, 
+          SD.plot.C, SD.plot.S, SD.plot.R,
+          LIGHT.plot.C, LIGHT.plot.S, LIGHT.plot.R, 
+          MOI.plot.C, MOI.plot.S, MOI.plot.R,
+          NUT.plot.C, NUT.plot.S, NUT.plot.R, 
+          align = "hv",
+          labels = "AUTO",
+          heights = c(0.25, 0.25, 0.25, 0.25),
+          widths = c(0.33, 0.33, 0.33),
+          # labels = c("A", "B"),label_size = 14,
+          ncol = 6, nrow = 4) + 
+  theme(plot.margin = margin(0.25,0.25,0.5,0.25, unit = "cm"))
+
+ggsave("Figure2.pdf", plot = last_plot(),
+       device = "pdf", dpi = 600, limitsize = FALSE,
+       width = 30, height = 22, units = "cm")
+
+```
+
+## Part 2 CCA (traits+envi)
+```{r}
+#traits
+str(CSR.data_01)
+colnames(CSR.data_01)
+
+#envi
+str(CSR.envi_02)
+colnames(CSR.envi_02)
+
+#growthform
+str(CSR.catedata_08)
+
+#
+str(CSR.clo_01_impute_data_F_01)
+CSR.Clon <- CSR.clo_01_impute_data_F_01 %>% 
+  dplyr::select(species, BBRsize, BBRdepth, spread, persistence)
+length(unique(CSR.Clon$species)) #7038
+```
+
+### 1.all
+#### 1.1all traits
+```{r}
+#
+CSR.data.CCA_all <- CSR.data_01 %>% 
+  ungroup() %>% 
+  dplyr::select(species, c_score:r_score, H.m:RGR, Lthick.mm:growing_season_length) %>% 
+  dplyr::filter(!is.na(seedbankdensity.m2)) %>% 
+  dplyr::filter(!is.na(RTD.g.cm3)) %>% 
+  dplyr::filter(!is.na(Pollen_per_flower)) %>% 
+  dplyr::filter(!is.na(Myco)) %>%#6993 species
+  dplyr::left_join(CSR.Clon, by = c("species" = "species")) %>% 
+  dplyr::select(species, c_score:r_score, H.m:Stylelength.mm, Flowers_per_plant, Ovule_number, 
+                Pollen_per_flower, BBRsize:persistence) %>% 
+  dplyr::filter(!is.na(BBRsize)) %>% 
+  dplyr::rename("SBD" = "seedbankdensity.m2") %>% 
+  dplyr::rename("RCT" = "Root_cortex_thickness") %>%
+  dplyr::rename("SF" = "Self.compatibility_index_FS") %>%
+  dplyr::rename("AT" = "Autofertility_index_FS") %>%
+  dplyr::rename("FS" = "Flowersize.mm") %>%
+  dplyr::rename("SL" = "Stylelength.mm") %>%
+  dplyr::rename("FN" = "Flowers_per_plant") %>%
+  dplyr::rename("ON" = "Ovule_number") %>%
+  dplyr::rename("PN" = "Pollen_per_flower") %>%
+  dplyr::rename("Per" = "persistence")
+  
+colnames(CSR.data.CCA_all)
+summary(CSR.data.CCA_all)
+#analyses
+CSR.traits.cca <- vegan::cca(CSR.data.CCA_all[,c(2:4)]~., CSR.data.CCA_all[,c(5:29)])
+plot(CSR.traits.cca, scaling = 1)
+autoplot(CSR.traits.cca)
+CSR.traits.cca.scaling1 <- summary(CSR.traits.cca, scaling = 1)
+CSR.traits.cca.scaling1
+R2 <- RsquareAdj(CSR.traits.cca)
+vif.cca(CSR.traits.cca)
+#R2
+CSR.traits.cca.noadj <- R2$r.squared
+CSR.traits.cca.adj <- R2$adj.r.squared
+#explain percent
+CSR.traits.cca.exp.adj <- CSR.traits.cca.adj * CSR.traits.cca$CCA$eig/sum(CSR.traits.cca$CCA$eig)
+CCA1 <- paste("CCA1 (", round(CSR.traits.cca.exp.adj[1]*100, 1),"%)")
+CCA2 <- paste("CCA2 (", round(CSR.traits.cca.exp.adj[2]*100, 1),"%)")
+#置换检验
+CSR.traits.cca.test <- anova.cca(CSR.traits.cca, permutations = 999)
+CSR.traits.cca.test.axis <- anova.cca(CSR.traits.cca, by = "axis", permutations = 999)
+CSR.traits.cca.test.axis$`Pr(>F)` <- p.adjust(CSR.traits.cca.test.axis$`Pr(>F)`, method = "bonferroni")
+#提取数据作图
+CSR.traits.cca.sites <- data.frame(CSR.traits.cca.scaling1$sites)[1:2]
+CSR.traits.cca.sites$species <- rownames(CSR.traits.cca.sites)
+CSR.traits.cca.env <- data.frame(CSR.traits.cca.scaling1$biplot)[1:2]
+CSR.traits.cca.csr <- data.frame(CSR.traits.cca.scaling1$species)[1:2]
+CSR.traits.cca.csr$CSR <- rownames(CSR.traits.cca.csr)
+#绘图
+#color = c("#1597A5","#FFC24B","#FEB3AE")
+CSR.traits.CCA <- CSR.traits.cca.sites %>% 
+  ggplot(aes(x = CCA1, y = -1*CCA2))+  #-CCA2 为了旋转Y轴，将其×(-1)
+  theme_bw()+
+  geom_hdr(show.legend = F, 
+           method = "freqpoly", 
+           probs = c(0.99, 0.95, 0.8, 0.7, 0.6, 0.5, 0.25, 0.1), 
+           # n = 300, 
+           fill = "#6A3D9A") + #, method = "histogram", color = "#279F6B", "#BEBADA"  #8DA0CB
+  geom_point(data = CSR.traits.cca.sites, size = 4, shape = 16, alpha = 0.25, color = "#8DA0CB")+#"#279F6B"
+  theme(panel.grid = element_blank())+
+  geom_vline(xintercept = 0, lty = "dashed", color = "black" , linewidth = 0.8)+ #size = 0.8
+  geom_hline(yintercept = 0, lty = "dashed", color = "black" , linewidth = 0.8)+ 
+  labs(x = CCA1, y = CCA2)+
+  geom_point(data = CSR.traits.cca.csr, aes(x = CCA1, y = -1*CCA2, size = CSR),
+             color = "black", size = 4)+
+  scale_shape_manual(values = c(1, 2, 5))+
+  geom_text_repel(data = CSR.traits.cca.csr, aes(label = CSR), size = 6) + 
+  theme(axis.title.x = element_text(size = 15),
+        axis.title.y = element_text(size = 15, angle = 90),
+        axis.text.x = element_text(size = 11),
+        axis.text.y = element_text(size = 11),
+        panel.grid = element_blank())+
+  geom_segment(data = CSR.traits.cca.env, 
+               aes(x = 0, y = 0, xend = CCA1*3, yend = -1*CCA2*3),
+               color = "#FB8072", size = 1,
+               arrow = arrow(angle = 35, length = unit(0.3, "cm")))+
+  geom_text(data = CSR.traits.cca.env, 
+            aes(x = CCA1, y = -1*CCA2, 
+                label = rownames(CSR.traits.cca.env)), 
+            size = 5, color = "black", 
+            hjust = (1 - sign(CSR.traits.cca.env$CCA1))/1.6, angle =  (180/pi)*atan(CSR.traits.cca.env$CCA2*(-1)/CSR.traits.cca.env$CCA1))+
+  theme(legend.position = "top")
+CSR.traits.CCA
+
+```
+
+#### 1.2all envi
+```{r}
+#data
+colnames(CSR.envi_02)
+summary(CSR.envi_02)
+
+CSR.envi_03 <- CSR.envi_02 %>% #方法1
+  select(c_score:r_score, Disturbance.Severity:SALINITY) %>% 
+  filter_all(all_vars(!is.na(.))) #1358 species
+colnames(CSR.envi_03)
+
+#model
+CSR.envi.cca <- vegan::cca(CSR.envi_03[,c(1:3)]~., CSR.envi_03[,c(4:16)])
+plot(CSR.envi.cca, scaling = 1)
+autoplot(CSR.envi.cca)
+CSR.envi.cca.scaling1 <- summary(CSR.envi.cca, scaling = 1)
+CSR.envi.cca.scaling1
+R2 <- RsquareAdj(CSR.envi.cca)
+vif.cca(CSR.envi.cca)
+#R2
+CSR.envi.cca.noadj <- R2$r.squared
+CSR.envi.cca.adj <- R2$adj.r.squared
+#explain percent
+CSR.envi.cca.exp.adj <- CSR.envi.cca.adj * CSR.envi.cca$CCA$eig/sum(CSR.envi.cca$CCA$eig)
+CCA1 <- paste("CCA1 (", round(CSR.envi.cca.exp.adj[1]*100, 1),"%)")
+CCA2 <- paste("CCA2 (", round(CSR.envi.cca.exp.adj[2]*100, 1),"%)")
+#置换检验
+CSR.envi.cca.test <- anova.cca(CSR.envi.cca, permutations = 999)
+CSR.envi.cca.test.axis <- anova.cca(CSR.envi.cca, by = "axis", permutations = 999)
+CSR.envi.cca.test.axis$`Pr(>F)` <- p.adjust(CSR.envi.cca.test.axis$`Pr(>F)`, method = "bonferroni")
+#提取数据作图
+CSR.envi.cca.sites <- data.frame(CSR.envi.cca.scaling1$sites)[1:2]
+CSR.envi.cca.sites$species <- rownames(CSR.envi.cca.sites)
+CSR.envi.cca.env <- data.frame(CSR.envi.cca.scaling1$biplot)[1:2]
+CSR.envi.cca.csr <- data.frame(CSR.envi.cca.scaling1$species)[1:2]
+CSR.envi.cca.csr$CSR <- rownames(CSR.envi.cca.csr)
+#绘图
+#color = c("#1597A5","#FFC24B","#FEB3AE")
+CSR.envi.CCA <- CSR.envi.cca.sites %>% 
+  ggplot(aes(x = CCA1, y = CCA2))+ 
+  theme_bw()+
+  geom_hdr(show.legend = F, 
+           method = "freqpoly", 
+           probs = c(0.99, 0.95, 0.8, 0.7, 0.6, 0.5, 0.4, 0.25, 0.1), 
+           # n = 300, 
+           fill = "#FDB462") +
+  geom_point(data = CSR.envi.cca.sites, size = 4, shape = 16, alpha = 0.25, color = "#8DA0CB")+
+  theme(panel.grid = element_blank())+
+  geom_vline(xintercept = 0, lty = "dashed", color = "black", size = 0.8)+
+  geom_hline(yintercept = 0, lty = "dashed", color = "black", size = 0.8)+
+  labs(x = CCA1, y = CCA2)+
+  geom_point(data = CSR.envi.cca.csr, aes(x = CCA1, y = CCA2, size = CSR), #shape = CSR, 
+             color = "black", size = 4)+
+  scale_shape_manual(values = c(1, 2, 5))+
+  geom_text_repel(data = CSR.envi.cca.csr, aes(label = CSR), size = 6) + 
+  theme(axis.title.x = element_text(size = 15),
+        axis.title.y = element_text(size = 15, angle = 90),
+        axis.text.x = element_text(size = 11),
+        axis.text.y = element_text(size = 11),
+        panel.grid = element_blank())+
+  geom_segment(data = CSR.envi.cca.env, aes(x = 0, y = 0, xend = CCA1*3, yend = CCA2*3),
+               color = "#1B9E77", size = 1,
+               arrow = arrow(angle = 35, length = unit(0.3, "cm")))+
+  geom_text(data = CSR.envi.cca.env, 
+            aes(x = CCA1, y = CCA2, 
+                label = rownames(CSR.envi.cca.env)), 
+            size = 4, color = "black", 
+            hjust = (1 - sign(CSR.envi.cca.env$CCA1))/1.6, angle = (180/pi)*atan(CSR.envi.cca.env$CCA2/CSR.envi.cca.env$CCA1))+
+  theme(legend.position = "top")
+CSR.envi.CCA
+```
+
+### 1.all save
+```{r}
+#Figure 4
+ggpubr::ggarrange(CSR.traits.CCA, CSR.envi.CCA, 
+          labels = c("A", "B"),
+          align = "h",
+          heights = c(0.49, 0.49),
+          widths = c(0.49, 0.49),
+          # labels = "AUTO",, label_size = 14
+          ncol = 2, nrow = 1) + 
+  theme(plot.margin = margin(0.25,0.25,0.25,0.25, unit = "cm"))
+
+ggsave("Figure3_0416.pdf", plot = last_plot(),
+       device = "pdf", dpi = 600, limitsize = FALSE,
+       width = 30, height = 15, units = "cm")
+```
+
+
+### 2.tree
+#### 2.1tree traits
+```{r}
+#traits
+str(CSR.data_01)
+head(CSR.data_01, n = 5)
+colnames(CSR.data_01)
+
+#growthform
+str(CSR.catedata_08)
+head(CSR.catedata_08, n = 5)
+table(CSR.catedata_08$growthform)
+ # herb shrub  tree 
+ # 3860  1220  1958
+summary(CSR.catedata_08)
+
+#filter data
+CSR.tree.trait <- CSR.catedata_08 %>% 
+  dplyr::select(taxon_name, c_score:r_score, growthform) %>% 
+  dplyr::filter(growthform == "tree") %>% #1958 species
+  dplyr::left_join(CSR.data_01[,c(1,7,10:20,22:37)], by = c("taxon_name" = "taxon_name")) %>% 
+ dplyr::filter(!is.na(H.m)) %>% #1957 species
+  dplyr::filter(!is.na(seedbankdensity.m2)) %>% #1939 species
+  dplyr::filter(!is.na(Pollen_per_flower)) %>% #1938 species
+  dplyr::left_join(CSR.Clon, by = c("species" = "species")) %>% 
+  dplyr::select(c_score:r_score, H.m:Stylelength.mm, Flowers_per_plant, Ovule_number,
+                Pollen_per_flower, BBRsize:persistence) %>% 
+  dplyr::rename("SBD" = "seedbankdensity.m2") %>% 
+  dplyr::rename("RCT" = "Root_cortex_thickness") %>%
+  dplyr::rename("SF" = "Self.compatibility_index_FS") %>%
+  dplyr::rename("AT" = "Autofertility_index_FS") %>%
+  dplyr::rename("FS" = "Flowersize.mm") %>%
+  dplyr::rename("SL" = "Stylelength.mm") %>%
+  dplyr::rename("FN" = "Flowers_per_plant") %>%
+  dplyr::rename("ON" = "Ovule_number") %>%
+  dplyr::rename("PN" = "Pollen_per_flower") %>%
+  dplyr::rename("Per" = "persistence")
+
+colnames(CSR.tree.trait)
+summary(CSR.tree.trait)
+
+
+#analyses
+CSR.traits.cca.tree <- vegan::cca(CSR.tree.trait[,c(1:3)]~., CSR.tree.trait[,c(4:28)])
+plot(CSR.traits.cca.tree, scaling = 1)
+autoplot(CSR.traits.cca.tree)
+CSR.traits.cca.tree.scaling1 <- summary(CSR.traits.cca.tree, scaling = 1)
+CSR.traits.cca.tree.scaling1
+R2 <- RsquareAdj(CSR.traits.cca.tree)
+vif.cca(CSR.traits.cca.tree)
+#R2
+CSR.traits.cca.tree.noadj <- R2$r.squared
+CSR.traits.cca.tree.adj <- R2$adj.r.squared
+#explain percent
+CSR.traits.cca.tree.exp.adj <- CSR.traits.cca.tree.adj * CSR.traits.cca.tree$CCA$eig/sum(CSR.traits.cca.tree$CCA$eig)
+CCA1 <- paste("CCA1 (", round(CSR.traits.cca.tree.exp.adj[1]*100, 1),"%)")
+CCA2 <- paste("CCA2 (", round(CSR.traits.cca.tree.exp.adj[2]*100, 1),"%)")
+#置换检验
+CSR.traits.cca.tree.test <- anova.cca(CSR.traits.cca.tree, permutations = 999)
+CSR.traits.cca.tree.test.axis <- anova.cca(CSR.traits.cca.tree, by = "axis", permutations = 999)
+CSR.traits.cca.tree.test.axis$`Pr(>F)` <- p.adjust(CSR.traits.cca.tree.test.axis$`Pr(>F)`, method = "bonferroni")
+#提取数据作图
+CSR.traits.cca.tree.sites <- data.frame(CSR.traits.cca.tree.scaling1$sites)[1:2]
+CSR.traits.cca.tree.sites$species <- rownames(CSR.traits.cca.tree.sites)
+CSR.traits.cca.tree.env <- data.frame(CSR.traits.cca.tree.scaling1$biplot)[1:2]
+CSR.traits.cca.tree.csr <- data.frame(CSR.traits.cca.tree.scaling1$species)[1:2]
+CSR.traits.cca.tree.csr$CSR <- rownames(CSR.traits.cca.tree.csr)
+#绘图
+#color = c("#1597A5","#FFC24B","#FEB3AE")
+CSR.traits.CCA.tree <- 
+  CSR.traits.cca.tree.sites %>% 
+  ggplot(aes(x = (-1)*CCA1, y = (-1)*CCA2))+ 
+  theme_bw()+
+  geom_hdr(show.legend = F, 
+           method = "freqpoly", 
+           probs = c(0.99, 0.95, 0.8, 0.7, 0.6, 0.5, 0.25, 0.1), 
+           # n = 300, 
+           fill = "#6A3D9A") + #, method = "histogram", color = "#279F6B", "#BEBADA"  #8DA0CB
+  geom_point(data = CSR.traits.cca.tree.sites, size = 4, shape = 16, alpha = 0.25, color = "#8DA0CB")+#"#279F6B"
+  theme(panel.grid = element_blank())+
+  geom_vline(xintercept = 0, lty = "dashed", color = "black" , linewidth = 0.8)+ #size = 0.8
+  geom_hline(yintercept = 0, lty = "dashed", color = "black" , linewidth = 0.8)+ #size = 0.8
+  labs(x = CCA1, y = CCA2)+
+  geom_point(data = CSR.traits.cca.tree.csr, 
+             aes(x = (-1)*CCA1, y = (-1)*CCA2, size = CSR), #shape = CSR, 
+             color = "black", size = 4)+
+  scale_shape_manual(values = c(1, 2, 5))+
+  geom_text_repel(data = CSR.traits.cca.tree.csr, aes(label = CSR), size = 6) + 
+  theme(axis.title.x = element_text(size = 15),
+        axis.title.y = element_text(size = 15, angle = 90),
+        axis.text.x = element_text(size = 11),
+        axis.text.y = element_text(size = 11),
+        panel.grid = element_blank())+
+  geom_segment(data = CSR.traits.cca.tree.env, 
+               aes(x = 0, y = 0, xend = (-1)*CCA1*3, yend = (-1)*CCA2*3),
+               color = "#FB8072", size = 1,
+               arrow = arrow(angle = 35, length = unit(0.3, "cm")))+
+  geom_text(data = CSR.traits.cca.tree.env, 
+            aes(x = (-1)*CCA1, y = (-1)*CCA2, 
+                label = rownames(CSR.traits.cca.tree.env)), 
+            size = 5, color = "black", 
+            hjust = (1 - sign(CSR.traits.cca.tree.env$CCA1*(-1)))/1.6, angle = -(180/pi)*atan(CSR.traits.cca.tree.env$CCA2*(-1)/CSR.traits.cca.tree.env$CCA1*(-1)))+
+  theme(legend.position = "top")
+CSR.traits.CCA.tree
+
+```
+
+#### 2.2tree envi
+```{r}
+#envi
+str(CSR.envi_02)
+colnames(CSR.envi_02)
+#growthform
+str(CSR.catedata_08)
+colnames(CSR.catedata_08)
+
+#得到完整的数据集
+CSR.envi.tree <- CSR.envi_02 %>% 
+  select(taxon_name, c_score:r_score, Disturbance.Severity:SALINITY) %>% 
+  # filter(across(c_score:SALINITY, ~ !is.na(.))) %>% 
+  filter(if_all(c_score:SALINITY, ~ !is.na(.))) %>% #1358 species
+  left_join(CSR.catedata_08[,c(1,9)], by = c("taxon_name" = "taxon_name")) %>% 
+  filter(growthform == "tree") %>% #75 species
+  select(c_score:SALINITY)
+colnames(CSR.envi.tree)
+
+#model
+CSR.envi.cca.tree <- vegan::cca(CSR.envi.tree[,c(1:3)]~., CSR.envi.tree[,c(4:16)])
+plot(CSR.envi.cca.tree, scaling = 1)
+autoplot(CSR.envi.cca.tree)
+CSR.envi.cca.tree.scaling1 <- summary(CSR.envi.cca.tree, scaling = 1)
+CSR.envi.cca.tree.scaling1
+R2 <- RsquareAdj(CSR.envi.cca.tree)
+vif.cca(CSR.envi.cca.tree)
+#R2
+CSR.envi.cca.tree.noadj <- R2$r.squared
+CSR.envi.cca.tree.adj <- R2$adj.r.squared
+#explain percent
+CSR.envi.cca.tree.exp.adj <- CSR.envi.cca.tree.adj * CSR.envi.cca.tree$CCA$eig/sum(CSR.envi.cca.tree$CCA$eig)
+CCA1 <- paste("CCA1 (", round(CSR.envi.cca.tree.exp.adj[1]*100, 1),"%)")
+CCA2 <- paste("CCA2 (", round(CSR.envi.cca.tree.exp.adj[2]*100, 1),"%)")
+#置换检验
+CSR.envi.cca.tree.test <- anova.cca(CSR.envi.cca.tree, permutations = 999)
+CSR.envi.cca.tree.test.axis <- anova.cca(CSR.envi.cca.tree, by = "axis", permutations = 999)
+CSR.envi.cca.tree.test.axis$`Pr(>F)` <- p.adjust(CSR.envi.cca.tree.test.axis$`Pr(>F)`, method = "bonferroni")
+#提取数据作图
+CSR.envi.cca.tree.sites <- data.frame(CSR.envi.cca.tree.scaling1$sites)[1:2]
+CSR.envi.cca.tree.sites$species <- rownames(CSR.envi.cca.tree.sites)
+CSR.envi.cca.tree.env <- data.frame(CSR.envi.cca.tree.scaling1$biplot)[1:2]
+CSR.envi.cca.tree.csr <- data.frame(CSR.envi.cca.tree.scaling1$species)[1:2]
+CSR.envi.cca.tree.csr$CSR <- rownames(CSR.envi.cca.tree.csr)
+#绘图
+#color = c("#1597A5","#FFC24B","#FEB3AE")
+CSR.envi.CCA.tree <- 
+  CSR.envi.cca.tree.sites %>% 
+  ggplot(aes(x = CCA1, y = CCA2*(-1)))+ 
+  theme_bw()+
+  geom_hdr(show.legend = F, 
+           method = "freqpoly", 
+           probs = c(0.99, 0.95, 0.8, 0.7, 0.6, 0.5, 0.4, 0.25, 0.1), 
+           # n = 300, 
+           fill = "#FDB462") +
+  geom_point(data = CSR.envi.cca.tree.sites, size = 4, shape = 16, alpha = 0.25, color = "#8DA0CB")+
+  theme(panel.grid = element_blank())+
+  geom_vline(xintercept = 0, lty = "dashed", color = "black", size = 0.8)+
+  geom_hline(yintercept = 0, lty = "dashed", color = "black", size = 0.8)+
+  #  geom_text(aes()
+  labs(x = CCA1, y = CCA2)+
+  geom_point(data = CSR.envi.cca.tree.csr, aes(x = CCA1, y = CCA2*(-1), size = CSR), #shape = CSR, 
+             color = "black", size = 4)+
+  scale_shape_manual(values = c(1, 2, 5))+
+  geom_text_repel(data = CSR.envi.cca.tree.csr, aes(label = CSR), size = 6) + 
+  theme(axis.title.x = element_text(size = 15),
+        axis.title.y = element_text(size = 15, angle = 90),
+        axis.text.x = element_text(size = 11),
+        axis.text.y = element_text(size = 11),
+        panel.grid = element_blank())+
+  geom_segment(data = CSR.envi.cca.tree.env, aes(x = 0, y = 0, xend = CCA1*3, yend = CCA2*(-1)*3),
+               color = "#1B9E77", size = 1,
+               arrow = arrow(angle = 35, length = unit(0.3, "cm")))+
+  geom_text(data = CSR.envi.cca.tree.env, 
+            aes(x = CCA1, y = CCA2*(-1), 
+                label = rownames(CSR.envi.cca.tree.env)), 
+            size = 4, color = "black", 
+            hjust = (1 - sign(CSR.envi.cca.tree.env$CCA1))/1.6, angle = (180/pi)*atan(CSR.envi.cca.tree.env$CCA2*(-1)/CSR.envi.cca.tree.env$CCA1))+
+  theme(legend.position = "top")
+CSR.envi.CCA.tree
+
+```
+
+### 3.shrub
+#### 3.1shrub traits
+```{r}
+#traits
+str(CSR.data_01)
+head(CSR.data_01, n = 5)
+colnames(CSR.data_01)
+
+#growthform
+str(CSR.catedata_08)
+head(CSR.catedata_08, n = 5)
+table(CSR.catedata_08$growthform)
+ # herb shrub  tree 
+ # 3860  1220  1958
+summary(CSR.catedata_08)
+
+#filter data
+CSR.shrub.trait <- CSR.catedata_08 %>% 
+  dplyr::select(taxon_name, c_score:r_score, growthform) %>% 
+  dplyr::filter(growthform == "shrub") %>% #1220 species
+  dplyr::left_join(CSR.data_01[,c(1,7,10:20,22:37)], by = c("taxon_name" = "taxon_name")) %>% 
+  dplyr::filter(!is.na(RTD.g.cm3)) %>% #1218 species
+  dplyr::filter(!is.na(seedbankdensity.m2)) %>% #1204 species
+  dplyr::filter(!is.na(Pollen_per_flower)) %>% #1203 species
+  dplyr::left_join(CSR.Clon, by = c("species" = "species")) %>% 
+  dplyr::select(c_score:r_score, H.m:Stylelength.mm, Flowers_per_plant, Ovule_number,
+                Pollen_per_flower, BBRsize:persistence) %>% 
+  dplyr::rename("SBD" = "seedbankdensity.m2") %>% 
+  dplyr::rename("RCT" = "Root_cortex_thickness") %>%
+  dplyr::rename("SF" = "Self.compatibility_index_FS") %>%
+  dplyr::rename("AT" = "Autofertility_index_FS") %>%
+  dplyr::rename("FS" = "Flowersize.mm") %>%
+  dplyr::rename("SL" = "Stylelength.mm") %>%
+  dplyr::rename("FN" = "Flowers_per_plant") %>%
+  dplyr::rename("ON" = "Ovule_number") %>%
+  dplyr::rename("PN" = "Pollen_per_flower") %>%
+  dplyr::rename("Per" = "persistence")
+
+colnames(CSR.shrub.trait)
+summary(CSR.shrub.trait)
+
+#analyses
+CSR.traits.cca.shrub <- vegan::cca(CSR.shrub.trait[,c(1:3)]~., CSR.shrub.trait[,c(4:28)])
+plot(CSR.traits.cca.shrub, scaling = 1)
+autoplot(CSR.traits.cca.shrub)
+CSR.traits.cca.shrub.scaling1 <- summary(CSR.traits.cca.shrub, scaling = 1)
+CSR.traits.cca.shrub.scaling1
+R2 <- RsquareAdj(CSR.traits.cca.shrub)
+vif.cca(CSR.traits.cca.shrub)
+#R2
+CSR.traits.cca.shrub.noadj <- R2$r.squared
+CSR.traits.cca.shrub.adj <- R2$adj.r.squared
+#explain percent
+CSR.traits.cca.shrub.exp.adj <- CSR.traits.cca.shrub.adj * CSR.traits.cca.shrub$CCA$eig/sum(CSR.traits.cca.shrub$CCA$eig)
+CCA1 <- paste("CCA1 (", round(CSR.traits.cca.shrub.exp.adj[1]*100, 1),"%)")
+CCA2 <- paste("CCA2 (", round(CSR.traits.cca.shrub.exp.adj[2]*100, 1),"%)")
+#置换检验
+CSR.traits.cca.shrub.test <- anova.cca(CSR.traits.cca.shrub, permutations = 999)
+CSR.traits.cca.shrub.test.axis <- anova.cca(CSR.traits.cca.shrub, by = "axis", permutations = 999)
+CSR.traits.cca.shrub.test.axis$`Pr(>F)` <- p.adjust(CSR.traits.cca.shrub.test.axis$`Pr(>F)`, method = "bonferroni")
+#提取数据作图
+CSR.traits.cca.shrub.sites <- data.frame(CSR.traits.cca.shrub.scaling1$sites)[1:2]
+CSR.traits.cca.shrub.sites$species <- rownames(CSR.traits.cca.shrub.sites)
+CSR.traits.cca.shrub.env <- data.frame(CSR.traits.cca.shrub.scaling1$biplot)[1:2]
+CSR.traits.cca.shrub.csr <- data.frame(CSR.traits.cca.shrub.scaling1$species)[1:2]
+CSR.traits.cca.shrub.csr$CSR <- rownames(CSR.traits.cca.shrub.csr)
+#绘图
+#color = c("#1597A5","#FFC24B","#FEB3AE")
+CSR.traits.CCA.shrub <- CSR.traits.cca.shrub.sites %>% 
+  ggplot(aes(x = CCA1, y = CCA2))+ 
+  theme_bw()+
+  geom_hdr(show.legend = F, 
+           method = "freqpoly", 
+           probs = c(0.99, 0.95, 0.8, 0.7, 0.6, 0.5, 0.25, 0.1), 
+           # n = 300, 
+           fill = "#6A3D9A") + #, method = "histogram", color = "#279F6B", "#BEBADA"  #8DA0CB
+  geom_point(data = CSR.traits.cca.shrub.sites, size = 4, shape = 16, alpha = 0.25, color = "#8DA0CB")+#"#279F6B"
+  theme(panel.grid = element_blank())+
+  geom_vline(xintercept = 0, lty = "dashed", color = "black" , linewidth = 0.8)+ #size = 0.8
+  geom_hline(yintercept = 0, lty = "dashed", color = "black" , linewidth = 0.8)+ #size = 0.8
+  #  geom_text(aes()
+  labs(x = CCA1, y = CCA2)+
+  # xlim(-1.1,1.9)+
+  geom_point(data = CSR.traits.cca.shrub.csr, aes(x = CCA1, y = CCA2, size = CSR), #shape = CSR, 
+             color = "black", size = 4)+
+  scale_shape_manual(values = c(1, 2, 5))+
+  geom_text_repel(data = CSR.traits.cca.shrub.csr, aes(label = CSR), size = 6) + 
+  theme(axis.title.x = element_text(size = 15),
+        axis.title.y = element_text(size = 15, angle = 90),
+        axis.text.x = element_text(size = 11),
+        axis.text.y = element_text(size = 11),
+        panel.grid = element_blank())+
+  geom_segment(data = CSR.traits.cca.shrub.env, 
+               aes(x = 0, y = 0, xend = CCA1*3, yend = CCA2*3),
+               color = "#FB8072", size = 1,
+               arrow = arrow(angle = 35, length = unit(0.3, "cm")))+
+  geom_text(data = CSR.traits.cca.shrub.env, 
+            aes(x = CCA1, y = CCA2, 
+                label = rownames(CSR.traits.cca.shrub.env)), 
+            size = 5, color = "black", 
+            hjust = (1 - sign(CSR.traits.cca.shrub.env$CCA1))/1.6, angle = (180/pi)*atan(CSR.traits.cca.shrub.env$CCA2/CSR.traits.cca.shrub.env$CCA1))+
+  theme(legend.position = "top")
+CSR.traits.CCA.shrub
+```
+
+#### 3.2shrub envi
+```{r}
+#envi
+str(CSR.envi_02)
+colnames(CSR.envi_02)
+#growthform
+str(CSR.catedata_08)
+colnames(CSR.catedata_08)
+
+#得到完整的数据集
+CSR.envi.shrub <- CSR.envi_02 %>% 
+  select(taxon_name, c_score:r_score, Disturbance.Severity:SALINITY) %>% 
+  # filter(across(c_score:SALINITY, ~ !is.na(.))) %>% 
+  filter(if_all(c_score:SALINITY, ~ !is.na(.))) %>% #1358 species
+  left_join(CSR.catedata_08[,c(1,9)], by = c("taxon_name" = "taxon_name")) %>% 
+  filter(growthform == "shrub") %>% #163 species
+  select(c_score:SALINITY)
+colnames(CSR.envi.shrub)
+
+#model
+CSR.envi.cca.shrub <- vegan::cca(CSR.envi.shrub[,c(1:3)]~., CSR.envi.shrub[,c(4:16)])
+plot(CSR.envi.cca.shrub, scaling = 1)
+autoplot(CSR.envi.cca.shrub)
+CSR.envi.cca.shrub.scaling1 <- summary(CSR.envi.cca.shrub, scaling = 1)
+CSR.envi.cca.shrub.scaling1
+R2 <- RsquareAdj(CSR.envi.cca.shrub)
+vif.cca(CSR.envi.cca.shrub)
+#R2
+CSR.envi.cca.shrub.noadj <- R2$r.squared
+CSR.envi.cca.shrub.adj <- R2$adj.r.squared
+#explain percent
+CSR.envi.cca.shrub.exp.adj <- CSR.envi.cca.shrub.adj * CSR.envi.cca.shrub$CCA$eig/sum(CSR.envi.cca.shrub$CCA$eig)
+CCA1 <- paste("CCA1 (", round(CSR.envi.cca.shrub.exp.adj[1]*100, 1),"%)")
+CCA2 <- paste("CCA2 (", round(CSR.envi.cca.shrub.exp.adj[2]*100, 1),"%)")
+#置换检验
+CSR.envi.cca.shrub.test <- anova.cca(CSR.envi.cca.shrub, permutations = 999)
+CSR.envi.cca.shrub.test.axis <- anova.cca(CSR.envi.cca.shrub, by = "axis", permutations = 999)
+CSR.envi.cca.shrub.test.axis$`Pr(>F)` <- p.adjust(CSR.envi.cca.shrub.test.axis$`Pr(>F)`, method = "bonferroni")
+#提取数据作图
+CSR.envi.cca.shrub.sites <- data.frame(CSR.envi.cca.shrub.scaling1$sites)[1:2]
+CSR.envi.cca.shrub.sites$species <- rownames(CSR.envi.cca.shrub.sites)
+CSR.envi.cca.shrub.env <- data.frame(CSR.envi.cca.shrub.scaling1$biplot)[1:2]
+CSR.envi.cca.shrub.csr <- data.frame(CSR.envi.cca.shrub.scaling1$species)[1:2]
+CSR.envi.cca.shrub.csr$CSR <- rownames(CSR.envi.cca.shrub.csr)
+#绘图
+#color = c("#1597A5","#FFC24B","#FEB3AE")
+CSR.envi.CCA.shrub <- CSR.envi.cca.shrub.sites %>% 
+  ggplot(aes(x = CCA1, y = CCA2*(-1)))+ 
+  theme_bw()+
+  geom_hdr(show.legend = F, 
+           method = "freqpoly", 
+           probs = c(0.99, 0.95, 0.8, 0.7, 0.6, 0.5, 0.4, 0.25, 0.1), 
+           # n = 300, 
+           fill = "#FDB462") +
+  geom_point(data = CSR.envi.cca.shrub.sites, size = 4, shape = 16, alpha = 0.25, color = "#8DA0CB")+
+  theme(panel.grid = element_blank())+
+  geom_vline(xintercept = 0, lty = "dashed", color = "black", size = 0.8)+
+  geom_hline(yintercept = 0, lty = "dashed", color = "black", size = 0.8)+
+  labs(x = CCA1, y = CCA2)+
+  geom_point(data = CSR.envi.cca.shrub.csr, aes(x = CCA1, y = CCA2*(-1), size = CSR), #shape = CSR, 
+             color = "black", size = 4)+
+  scale_shape_manual(values = c(1, 2, 5))+
+  geom_text_repel(data = CSR.envi.cca.shrub.csr, aes(label = CSR), size = 6) + 
+  theme(axis.title.x = element_text(size = 15),
+        axis.title.y = element_text(size = 15, angle = 90),
+        axis.text.x = element_text(size = 11),
+        axis.text.y = element_text(size = 11),
+        panel.grid = element_blank())+
+  geom_segment(data = CSR.envi.cca.shrub.env, aes(x = 0, y = 0, xend = CCA1*3, yend = CCA2*(-1)*3),
+               color = "#1B9E77", size = 1,
+               arrow = arrow(angle = 35, length = unit(0.3, "cm")))+
+  geom_text(data = CSR.envi.cca.shrub.env, 
+            aes(x = CCA1, y = CCA2*(-1), 
+                label = rownames(CSR.envi.cca.shrub.env)), 
+            size = 4, color = "black", 
+            hjust = (1 - sign(CSR.envi.cca.shrub.env$CCA1))/1.6, angle = (180/pi)*atan(CSR.envi.cca.shrub.env$CCA2*(-1)/CSR.envi.cca.shrub.env$CCA1))+
+  theme(legend.position = "top")
+CSR.envi.CCA.shrub
+```
+
+### 4.herb
+#### 4.1herb traits
+```{r}
+#traits
+str(CSR.data_01)
+head(CSR.data_01, n = 5)
+colnames(CSR.data_01)
+
+#growthform
+str(CSR.catedata_08)
+head(CSR.catedata_08, n = 5)
+table(CSR.catedata_08$growthform)
+ # herb shrub  tree 
+ # 3860  1220  1958
+summary(CSR.catedata_08)
+
+#filter data
+CSR.herb.trait <- CSR.catedata_08 %>% 
+  dplyr::select(taxon_name, c_score:r_score, growthform) %>% 
+  dplyr::filter(growthform == "herb") %>% #3860 species
+  dplyr::left_join(CSR.data_01[,c(1,7,10:20,22:37)], by = c("taxon_name" = "taxon_name")) %>% 
+  dplyr::filter(!is.na(Myco)) %>% #3859 species
+  dplyr::filter(!is.na(seedbankdensity.m2)) %>% #3858 species
+  dplyr::filter(!is.na(Pollen_per_flower)) %>% #3852 species
+  dplyr::left_join(CSR.Clon, by = c("species" = "species")) %>% 
+  dplyr::select(c_score:r_score, H.m:Stylelength.mm, Flowers_per_plant, Ovule_number,
+                Pollen_per_flower, BBRsize:persistence) %>% 
+  dplyr::filter(!is.na(BBRsize)) %>% 
+  dplyr::rename("SBD" = "seedbankdensity.m2") %>% 
+  dplyr::rename("RCT" = "Root_cortex_thickness") %>%
+  dplyr::rename("SF" = "Self.compatibility_index_FS") %>%
+  dplyr::rename("AT" = "Autofertility_index_FS") %>%
+  dplyr::rename("FS" = "Flowersize.mm") %>%
+  dplyr::rename("SL" = "Stylelength.mm") %>%
+  dplyr::rename("FN" = "Flowers_per_plant") %>%
+  dplyr::rename("ON" = "Ovule_number") %>%
+  dplyr::rename("PN" = "Pollen_per_flower") %>%
+  dplyr::rename("Per" = "persistence")
+
+colnames(CSR.herb.trait)
+summary(CSR.herb.trait)
+
+#analyses
+CSR.traits.cca.herb <- vegan::cca(CSR.herb.trait[,c(1:3)]~., CSR.herb.trait[,c(4:28)])
+plot(CSR.traits.cca.herb, scaling = 1)
+autoplot(CSR.traits.cca.herb)
+CSR.traits.cca.herb.scaling1 <- summary(CSR.traits.cca.herb, scaling = 1)
+CSR.traits.cca.herb.scaling1
+R2 <- RsquareAdj(CSR.traits.cca.herb)
+vif.cca(CSR.traits.cca.herb)
+#R2
+CSR.traits.cca.herb.noadj <- R2$r.squared
+CSR.traits.cca.herb.adj <- R2$adj.r.squared
+#explain percent
+CSR.traits.cca.herb.exp.adj <- CSR.traits.cca.herb.adj * CSR.traits.cca.herb$CCA$eig/sum(CSR.traits.cca.herb$CCA$eig)
+CCA1 <- paste("CCA1 (", round(CSR.traits.cca.herb.exp.adj[1]*100, 1),"%)")
+CCA2 <- paste("CCA2 (", round(CSR.traits.cca.herb.exp.adj[2]*100, 1),"%)")
+#置换检验
+CSR.traits.cca.herb.test <- anova.cca(CSR.traits.cca.herb, permutations = 999)
+CSR.traits.cca.herb.test.axis <- anova.cca(CSR.traits.cca.herb, by = "axis", permutations = 999)
+CSR.traits.cca.herb.test.axis$`Pr(>F)` <- p.adjust(CSR.traits.cca.herb.test.axis$`Pr(>F)`, method = "bonferroni")
+#提取数据作图
+CSR.traits.cca.herb.sites <- data.frame(CSR.traits.cca.herb.scaling1$sites)[1:2]
+CSR.traits.cca.herb.sites$species <- rownames(CSR.traits.cca.herb.sites)
+CSR.traits.cca.herb.env <- data.frame(CSR.traits.cca.herb.scaling1$biplot)[1:2]
+CSR.traits.cca.herb.csr <- data.frame(CSR.traits.cca.herb.scaling1$species)[1:2]
+CSR.traits.cca.herb.csr$CSR <- rownames(CSR.traits.cca.herb.csr)
+#绘图
+#color = c("#1597A5","#FFC24B","#FEB3AE")
+CSR.traits.CCA.herb <- CSR.traits.cca.herb.sites %>% 
+  ggplot(aes(x = CCA1*(-1), y = CCA2))+ 
+  theme_bw()+
+  geom_hdr(show.legend = F, 
+           method = "freqpoly", 
+           probs = c(0.99, 0.95, 0.8, 0.7, 0.6, 0.5, 0.25, 0.1), 
+           # n = 300, 
+           fill = "#6A3D9A") + #, method = "histogram", color = "#279F6B", "#BEBADA"  #8DA0CB
+  geom_point(data = CSR.traits.cca.herb.sites, size = 4, shape = 16, alpha = 0.25, color = "#8DA0CB")+#"#279F6B"
+  theme(panel.grid = element_blank())+
+  geom_vline(xintercept = 0, lty = "dashed", color = "black" , linewidth = 0.8)+ #size = 0.8
+  geom_hline(yintercept = 0, lty = "dashed", color = "black" , linewidth = 0.8)+ 
+  labs(x = CCA1, y = CCA2)+
+  geom_point(data = CSR.traits.cca.herb.csr, aes(x = CCA1*(-1), y = CCA2, size = CSR), #shape = CSR, 
+             color = "black", size = 4)+
+  scale_shape_manual(values = c(1, 2, 5))+
+  # geom_hdr_rug() + 
+  geom_text_repel(data = CSR.traits.cca.herb.csr, aes(label = CSR), size = 6) +
+  theme(axis.title.x = element_text(size = 15),
+        axis.title.y = element_text(size = 15, angle = 90),
+        axis.text.x = element_text(size = 11),
+        axis.text.y = element_text(size = 11),
+        panel.grid = element_blank())+
+  geom_segment(data = CSR.traits.cca.herb.env, 
+               aes(x = 0, y = 0, xend = CCA1*(-1)*3, yend = CCA2*3),
+               color = "#FB8072", size = 1,
+               arrow = arrow(angle = 35, length = unit(0.3, "cm")))+
+  geom_text(data = CSR.traits.cca.herb.env, 
+            aes(x = CCA1*(-1), y = CCA2, 
+                label = rownames(CSR.traits.cca.herb.env)), 
+            size = 5, color = "black", 
+            hjust = (1 - sign(CSR.traits.cca.herb.env$CCA1*(-1)))/1.6, angle = (180/pi)*atan(CSR.traits.cca.herb.env$CCA2/CSR.traits.cca.herb.env$CCA1*(-1)))+
+  theme(legend.position = "top")
+CSR.traits.CCA.herb
+```
+
+#### 4.2herb envi
+```{r}
+#envi
+str(CSR.envi_02)
+colnames(CSR.envi_02)
+#growthform
+str(CSR.catedata_08)
+colnames(CSR.catedata_08)
+
+#得到完整的数据集
+CSR.envi.herb <- CSR.envi_02 %>% 
+  select(taxon_name, c_score:r_score, Disturbance.Severity:SALINITY) %>% 
+  # filter(across(c_score:SALINITY, ~ !is.na(.))) %>% 
+  filter(if_all(c_score:SALINITY, ~ !is.na(.))) %>% #1358 species
+  left_join(CSR.catedata_08[,c(1,9)], by = c("taxon_name" = "taxon_name")) %>% 
+  filter(growthform == "herb") %>% #1120 species
+  select(c_score:SALINITY)
+colnames(CSR.envi.herb)
+
+#model
+CSR.envi.cca.herb <- vegan::cca(CSR.envi.herb[,c(1:3)]~., CSR.envi.herb[,c(4:16)])
+plot(CSR.envi.cca.herb, scaling = 1)
+autoplot(CSR.envi.cca.herb)
+CSR.envi.cca.herb.scaling1 <- summary(CSR.envi.cca.herb, scaling = 1)
+CSR.envi.cca.herb.scaling1
+R2 <- RsquareAdj(CSR.envi.cca.herb)
+vif.cca(CSR.envi.cca.herb)
+#R2
+CSR.envi.cca.herb.noadj <- R2$r.squared
+CSR.envi.cca.herb.adj <- R2$adj.r.squared
+#explain percent
+CSR.envi.cca.herb.exp.adj <- CSR.envi.cca.herb.adj * CSR.envi.cca.herb$CCA$eig/sum(CSR.envi.cca.herb$CCA$eig)
+CCA1 <- paste("CCA1 (", round(CSR.envi.cca.herb.exp.adj[1]*100, 1),"%)")
+CCA2 <- paste("CCA2 (", round(CSR.envi.cca.herb.exp.adj[2]*100, 1),"%)")
+#置换检验
+CSR.envi.cca.herb.test <- anova.cca(CSR.envi.cca.herb, permutations = 999)
+CSR.envi.cca.herb.test.axis <- anova.cca(CSR.envi.cca.herb, by = "axis", permutations = 999)
+CSR.envi.cca.herb.test.axis$`Pr(>F)` <- p.adjust(CSR.envi.cca.herb.test.axis$`Pr(>F)`, method = "bonferroni")
+#提取数据作图
+CSR.envi.cca.herb.sites <- data.frame(CSR.envi.cca.herb.scaling1$sites)[1:2]
+CSR.envi.cca.herb.sites$species <- rownames(CSR.envi.cca.herb.sites)
+CSR.envi.cca.herb.env <- data.frame(CSR.envi.cca.herb.scaling1$biplot)[1:2]
+CSR.envi.cca.herb.csr <- data.frame(CSR.envi.cca.herb.scaling1$species)[1:2]
+CSR.envi.cca.herb.csr$CSR <- rownames(CSR.envi.cca.herb.csr)
+#绘图
+#color = c("#1597A5","#FFC24B","#FEB3AE")
+CSR.envi.CCA.herb <- CSR.envi.cca.herb.sites %>% 
+  ggplot(aes(x = CCA1, y = CCA2))+ 
+  theme_bw()+
+  geom_hdr(show.legend = F, 
+           method = "freqpoly", 
+           probs = c(0.99, 0.95, 0.8, 0.7, 0.6, 0.5, 0.4, 0.25, 0.1), 
+           # n = 300, 
+           fill = "#FDB462") +
+  geom_point(data = CSR.envi.cca.herb.sites, size = 4, shape = 16, alpha = 0.25, color = "#8DA0CB")+
+  theme(panel.grid = element_blank())+
+  geom_vline(xintercept = 0, lty = "dashed", color = "black", size = 0.8)+
+  geom_hline(yintercept = 0, lty = "dashed", color = "black", size = 0.8)+
+  labs(x = CCA1, y = CCA2)+
+  geom_point(data = CSR.envi.cca.herb.csr, aes(x = CCA1, y = CCA2, size = CSR), #shape = CSR, 
+             color = "black", size = 4)+
+  scale_shape_manual(values = c(1, 2, 5))+
+  geom_text_repel(data = CSR.envi.cca.herb.csr, aes(label = CSR), size = 6) +
+  theme(axis.title.x = element_text(size = 15),
+        axis.title.y = element_text(size = 15, angle = 90),
+        axis.text.x = element_text(size = 11),
+        axis.text.y = element_text(size = 11),
+        panel.grid = element_blank())+
+  geom_segment(data = CSR.envi.cca.herb.env, aes(x = 0, y = 0, xend = CCA1*3, yend = CCA2*3),
+               color = "#1B9E77", size = 1,
+               arrow = arrow(angle = 35, length = unit(0.3, "cm")))+
+  geom_text(data = CSR.envi.cca.herb.env, 
+            aes(x = CCA1, y = CCA2, 
+                label = rownames(CSR.envi.cca.herb.env)), 
+            size = 4, color = "black", 
+            hjust = (1 - sign(CSR.envi.cca.herb.env$CCA1))/1.6, angle = (180/pi)*atan(CSR.envi.cca.herb.env$CCA2/CSR.envi.cca.herb.env$CCA1))+
+  theme(legend.position = "top")
+CSR.envi.CCA.herb
+```
+
+#### 2.all save
+```{r}
+
+ggarrange(CSR.traits.CCA.tree, 
+          CSR.traits.CCA.shrub, 
+          CSR.traits.CCA.herb,
+          CSR.envi.CCA.tree, 
+          CSR.envi.CCA.shrub, 
+          CSR.envi.CCA.herb,
+          labels = c("A","B","C", "D","E","F"),
+          align = "hv",
+          heights = c(0.49, 0.49),
+          widths = c(0.33, 0.33, 0.33),
+          # labels = "AUTO", label_size = 14
+          ncol = 3, nrow = 2) + 
+  theme(plot.margin = margin(0.25,0.25,0.25,0.25, unit = "cm"))
+
+ggsave("FigureS13_0416.pdf", plot = last_plot(),
+       device = "pdf", dpi = 600, limitsize = FALSE,
+       width = 30, height = 20, units = "cm")
+```
+
+## Part 3 correlation
+```{r}
+# data
+str(CSR_alldata_01) #7038
+colnames(CSR_alldata_01)
+
+```
+
+### All data person 
+```{r pressure, echo=FALSE}
+summary(CSRTraEnviCor)
+str(CSRTraEnviCor)
+
+CSRTraEnviCor <- CSR_alldata_01 %>% 
+  dplyr::select(c_score:r_score, LA.mm2:persistence, Disturbance.Severity:SALINITY) %>% 
+  na.omit() %>% #1353
+  rename("Dis.Sev" = "Disturbance.Severity") %>% 
+  rename("Dis.Sev.herb" = "Disturbance.Severity.herblayer") %>% 
+  rename("Dis.Fre" = "Disturbance.Frequency") %>% 
+  rename("Dis.Fre.herb" = "Disturbance.Frequency.herblayer") %>% 
+  rename("Soil.Dis" = "Soil.Disturbance") %>% 
+  rename("Mow.Fre" = "Mowing.Frequency") %>% 
+  rename("Graz.Pre" = "Grazing.Pressure")
+  
+str(CSRTraEnviCor)
+colnames(CSRTraEnviCor)
+summary(CSRTraEnviCor)
+
+# log and scale
+CSRTraEnviCorLogScale <- CSRTraEnviCor %>%
+  mutate(across(c(LA.mm2: SALINITY), ~ log(.+0.0001))) %>%  # 对指定列进行log转换
+  mutate(across(c(LA.mm2: SALINITY), ~ rescale(., to = c(0, 1)))) 
+
+summary(CSRTraEnviCorLogScale)
+
+#1.
+CSRTraEnviCorLogScaleMatrix <- as.matrix(CSRTraEnviCorLogScale)
+
+# rcorr(CSRTraEnviCorLogScaleMatrix)
+# chart.Correlation(CSRTraEnviCorLogScaleMatrix)
+
+#2.
+library(corrplot)
+CSRTraEnviCorLogScaleCorre <- cor(CSRTraEnviCorLogScale, method = "spearman")
+CSRTraEnviCorLogScaleCorre
+
+#data
+CSRTraEnviCorLogScaleCorreData <- as.data.frame(CSRTraEnviCorLogScaleCorre)
+
+#sign_valus
+signi.value = cor.mtest(CSRTraEnviCorLogScale, conf.level = 0.95)
+signi.value.data <- as.data.frame(signi.value)
+str(signi.value.data)
+
+corrplot(CSRTraEnviCorLogScaleCorre,
+         p.mat = signi.value$p,
+         order = "AOE",
+         method = "circle", insig='blank', number.cex = 0.8, addCoef.col ='black',
+         type = "lower", 
+         diag=FALSE)
+
+corrplot.mixed(CSR.Traits.envi.correlation.log.scale.corre, 
+               order = 'AOE')
+
+```
+
+#### C person 
+```{r pressure, echo=FALSE}
+colnames(CSRTraEnviCorLogScale)
+
+# CSRTraEnviCorLogScale.C <- cor(CSRTraEnviCorLogScale[,c(1,4:44)], method = "spearman")
+# CSRTraEnviCorLogScale.C
+CSRTraEnviCorLogScale.C <- cor(CSRTraEnviCorLogScale[,c(1,6:16,18:44)], method = "spearman")
+CSRTraEnviCorLogScale.C
+
+#data
+CSRTraEnviCorLogScale.C.data <-  as.data.frame(CSRTraEnviCorLogScale.C)
+
+#sign_valus
+signi.value.C = cor.mtest(CSRTraEnviCorLogScale.C, 
+                        conf.level = 0.95)
+signi.value.C.data <- signi.value.C$p %>% as.data.frame()
+str(signi.value.C.data)
+signi.value.C.data$c_score
+
+corrplot(CSRTraEnviCorLogScale.C,
+         p.mat = signi.value.C$p,
+         order = "AOE",
+         method = "circle", insig='blank', 
+         number.cex = 0.8, addCoef.col ='black',
+         type = "lower", 
+         diag=TRUE)
+
+write.csv(CSRTraEnviCorLogScale.C.data, "CSRTraitEnviCorre_C_data0816_01.csv")
+
+write.csv(signi.value.C.data, "CSRTraitEnviCorre_C_Pvalue0816_01.csv")
+
+```
+
+#### S person 
+```{r pressure, echo=FALSE}
+colnames(CSRTraEnviCorLogScale)
+
+# CSRTraEnviCorLogScale.S <- cor(CSRTraEnviCorLogScale[,c(2,4:44)], method = "spearman")
+# CSRTraEnviCorLogScale.S
+
+CSRTraEnviCorLogScale.S <- cor(CSRTraEnviCorLogScale[,c(2,6:16,18:44)], method = "spearman")
+CSRTraEnviCorLogScale.S
+
+#data
+CSRTraEnviCorLogScale.S.data <- as.data.frame(CSRTraEnviCorLogScale.S)
+
+#sign_valus
+signi.value.S = cor.mtest(CSRTraEnviCorLogScale.S, 
+                        conf.level = 0.95)
+signi.value.S.data <- signi.value.S$p %>% as.data.frame()
+str(signi.value.S.data)
+signi.value.S.data$s_score
+
+
+corrplot(CSRTraEnviCorLogScale.S,
+         p.mat = signi.value.S$p,
+         order = "AOE",
+         method = "circle", insig='blank', 
+         number.cex = 0.8, addCoef.col ='black',
+         type = "lower", 
+         diag=TRUE)
+
+write.csv(CSRTraEnviCorLogScale.S.data, "CSRTraitEnviCorre_S_data0816_01.csv")
+
+write.csv(signi.value.S.data, "CSRTraitEnviCorre_S_Pvalue0816_01.csv")
+
+```
+
+#### R person
+```{r pressure, echo=FALSE}
+colnames(CSRTraEnviCorLogScale)
+
+# CSRTraEnviCorLogScale.R <- cor(CSRTraEnviCorLogScale[,c(3,4:44)], method = "spearman")
+# CSRTraEnviCorLogScale.R
+
+CSRTraEnviCorLogScale.R <- cor(CSRTraEnviCorLogScale[,c(3,6:16,18:44)], method = "spearman")
+CSRTraEnviCorLogScale.R
+
+
+#data
+CSRTraEnviCorLogScale.R.data <- as.data.frame(CSRTraEnviCorLogScale.R)
+
+#sign_valus
+signi.value.R = cor.mtest(CSRTraEnviCorLogScale.R, 
+                        conf.level = 0.95)
+signi.value.R.data <- signi.value.R$p %>% as.data.frame()
+str(signi.value.R.data)
+signi.value.R.data$r_score
+
+corrplot(CSRTraEnviCorLogScale.R,
+         p.mat = signi.value.R$p,
+         order = "AOE",
+         method = "circle", insig='blank', 
+         number.cex = 0.8, addCoef.col ='black',
+         type = "lower", 
+         diag=TRUE)
+
+write.csv(CSRTraEnviCorLogScale.R.data, "CSRTraitEnviCorre_R_data0816_01.csv")
+
+write.csv(signi.value.R.data, "CSRTraitEnviCorre_R_Pvalue0816_01.csv")
+
+
+```
+
+#
+```{r}
+
+```
