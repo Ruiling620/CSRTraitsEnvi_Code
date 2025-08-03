@@ -440,7 +440,7 @@ CSRTraitEnvi_PerCor_df_log_scale <-
   mutate(across(c(H.m: SALINITY), ~ rescale(., to = c(0, 1))))
 
 ################### C scores ################### 
-CSR.Person.C <- cor(CSRTraitEnvi_PerCor_df_log_scale, method = "spearman")
+CSR.Person.C <- cor(CSRTraitEnvi_PerCor_df_log_scale) # method = "spearman"
 CSR.Person.C
 
 # data
@@ -785,4 +785,5 @@ ggplot(data = CSR_H_G_long, aes(x = csr.val, y = log(H.m), color = growthform)) 
     strip.background.y = element_rect(fill = "white", #linetype = "solid",
                                      color = "white", linewidth = 0.1))
 ```
+
 
