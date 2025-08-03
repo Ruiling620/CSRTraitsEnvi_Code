@@ -451,7 +451,7 @@ str(CSRTraitEnvi_PerCor_df_log_scale)
 colnames(CSRTraitEnvi_PerCor_df_log_scale)
 
 ################### C scores ################### 
-CSR.Person.C <- cor(CSRTraitEnvi_PerCor_df_log_scale[,c(1,4:44)]) # method = "spearman"
+CSR.Person.C <- cor(CSRTraitEnvi_PerCor_df_log_scale[,c(1,4:41)]) # method = "spearman"
 CSR.Person.C
 
 # data
@@ -463,7 +463,7 @@ Signi.value.C.data <- Signi.value.C$p %>% as.data.frame()
 str(Signi.value.C.data)
 
 ################### S scores ################### 
-CSR.Person.S <- cor(CSRTraitEnvi_PerCor_df_log_scale[,c(2,4:44)]) # method = "spearman"
+CSR.Person.S <- cor(CSRTraitEnvi_PerCor_df_log_scale[,c(2,4:41)]) # method = "spearman"
 CSR.Person.S
 
 # data
@@ -475,7 +475,7 @@ Signi.value.S.data <- Signi.value.S$p %>% as.data.frame()
 str(Signi.value.S.data)
 
 ################### R scores ################### 
-CSR.Person.R <- cor(CSRTraitEnvi_PerCor_df_log_scale[,c(3,4:44)]) # method = "spearman"
+CSR.Person.R <- cor(CSRTraitEnvi_PerCor_df_log_scale[,c(3,4:41)]) # method = "spearman"
 CSR.Person.R
 
 # data
@@ -815,4 +815,5 @@ ggplot(data = CSR_H_G_long, aes(x = csr.val, y = log(H.m), color = growthform)) 
     strip.background.y = element_rect(fill = "white", #linetype = "solid",
                                      color = "white", linewidth = 0.1))
 ```
+
 
